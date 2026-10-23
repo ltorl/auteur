@@ -89,6 +89,15 @@ def tiny_repo(tmp_path_factory):
     pipe = LTX2ImageToVideoPipeline(**comps).to(torch.bfloat16)
     pipe.save_pretrained(root)
     upsampler.to(torch.bfloat16).save_pretrained(root / "latent_upsampler")
+    # Like the real repo: the index lists optional extras (an alternative decoder)
+    # whose weights /fetch doesn't download. Loading must ignore them.
+    import json
+
+    index = json.loads((root / "model_index.json").read_text())
+    index["diffusion_decoder"] = ["diffusers", "LTX2VideoDiffusionDecoderModel"]
+    (root / "model_index.json").write_text(json.dumps(index))
+    (root / "diffusion_decoder").mkdir()
+    (root / "diffusion_decoder" / "config.json").write_text("{}")
     # Reference = the stock diffusers load path, which is what streaming must reproduce.
     return root, LTX2ImageToVideoPipeline.from_pretrained(root, dtype=torch.bfloat16)
 

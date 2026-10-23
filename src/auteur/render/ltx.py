@@ -170,9 +170,18 @@ class LTXStreamEngine:
         from diffusers import ModelMixin
         from transformers import PreTrainedModel
 
+        import inspect
+
+        import diffusers
+
+        # Only what the pipelines take: the repo's index also lists optional
+        # extras (e.g. an alternative diffusion_decoder) whose weights we don't fetch.
+        wanted = set()
+        for cls_name in ("LTX2ImageToVideoPipeline", "LTX2Pipeline"):
+            wanted |= set(inspect.signature(getattr(diffusers, cls_name).__init__).parameters) - {"self"}
         comps = {}
         for name, spec in model_index(self.weights).items():
-            if name.startswith("_") or not isinstance(spec, list) or spec[0] is None:
+            if name.startswith("_") or not isinstance(spec, list) or spec[0] is None or name not in wanted:
                 continue
             if name in SKIPPED:
                 comps[name] = None
@@ -189,6 +198,13 @@ class LTXStreamEngine:
                 if isinstance(mod, torch.nn.Module):
                     mod = mod.to(self.device).eval()
                 comps[name] = mod
+        if torch.device(self.device).type == "mps":
+            # MPS has no float64; LTX's RoPE tables default to it. float32 is the usual Apple-GPU fallback.
+            for comp in comps.values():
+                if isinstance(comp, torch.nn.Module):
+                    for m in comp.modules():
+                        if getattr(m, "double_precision", False) is True:
+                            m.double_precision = False
         self._comps = comps
         self.pipe = self._make_pipeline("LTX2ImageToVideoPipeline")
         self.pipe.vae.enable_tiling()

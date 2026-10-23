@@ -145,6 +145,94 @@ def render_ansi(renderable, width: int) -> list[tuple[str, str]]:
     return to_formatted_text(ANSI(OSC.sub("", buf.getvalue()).rstrip("\n")))
 
 
+# ---- stray output ------------------------------------------------------------------------ #
+
+
+class StdCapture:
+    """While the app owns the screen, nothing else may write to the terminal.
+
+    Libraries (and C code) print to file descriptors 1/2 directly, which would
+    scribble over the full-screen layout. We give prompt_toolkit its own handle on
+    the terminal, point fds 1/2 at a pipe, and feed whatever arrives into the
+    log as dim text.
+    """
+
+    def __init__(self, log: LogBuffer):
+        self.log = log
+        self.tty = None
+
+    def start(self):
+        import sys
+
+        sys.stdout.flush()
+        sys.stderr.flush()
+        self.saved = (os.dup(1), os.dup(2))
+        self.tty = os.fdopen(os.dup(1), "w", buffering=1, encoding="utf-8", errors="replace")
+        r, self.w = os.pipe()
+        os.dup2(self.w, 1)
+        os.dup2(self.w, 2)
+        self.reader = threading.Thread(target=self._pump, args=(r,), daemon=True, name="auteur-stdio")
+        self.reader.start()
+        return self.tty
+
+    def _pump(self, r: int) -> None:
+        import codecs
+
+        dec = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        pending = ""
+        while True:
+            try:
+                chunk = os.read(r, 65536)
+            except OSError:
+                break
+            if not chunk:
+                break
+            pending += dec.decode(chunk)
+            *lines, pending = pending.split("\n")
+            for line in lines:
+                line = line.split("\r")[-1].rstrip()  # progress bars: keep the final state
+                if line.strip():
+                    self.log.write(f"\x1b[2m  {line}\x1b[0m\n")
+        os.close(r)
+
+    def released(self):
+        """Context manager: real terminal on fds 1/2 (for interactive subprocesses)."""
+        import contextlib
+        import sys
+
+        @contextlib.contextmanager
+        def cm():
+            sys.stdout.flush()
+            sys.stderr.flush()
+            os.dup2(self.saved[0], 1)
+            os.dup2(self.saved[1], 2)
+            try:
+                yield
+            finally:
+                sys.stdout.flush()
+                sys.stderr.flush()
+                os.dup2(self.w, 1)
+                os.dup2(self.w, 2)
+
+        return cm()
+
+    def stop(self) -> None:
+        import sys
+
+        try:
+            sys.stdout.flush()
+            sys.stderr.flush()
+        except Exception:  # noqa: BLE001
+            pass
+        os.dup2(self.saved[0], 1)
+        os.dup2(self.saved[1], 2)
+        os.close(self.w)  # last write end → the reader sees EOF
+        self.reader.join(timeout=2)
+        for fd in self.saved:
+            os.close(fd)
+        self.tty.close()
+
+
 # ---- input helpers ------------------------------------------------------------------ #
 
 
@@ -202,6 +290,7 @@ class FullScreen(ui.Host):
         self.app: Application | None = None
         self.loop: asyncio.AbstractEventLoop | None = None
         self._log_cache: tuple | None = None
+        self.capture: StdCapture | None = None
         from .repl import SlashCompleter
 
         self.input = Buffer(
@@ -314,7 +403,7 @@ class FullScreen(ui.Host):
         return self.session.placeholder()
 
     # -- layout ------------------------------------------------------------------------ #
-    def build(self) -> Application:
+    def build(self, output=None) -> Application:
         self.log_window = Window(LogControl(self), wrap_lines=False, always_hide_cursor=True)
         secret = Condition(lambda: bool(self.question and self.question.secret))
         input_window = Window(
@@ -345,7 +434,7 @@ class FullScreen(ui.Host):
             refresh_interval=0.12,
             color_depth=depth,
             input=self.session.pt_input,
-            output=self.session.pt_output,
+            output=output or self.session.pt_output,
         )
 
     @staticmethod
@@ -559,8 +648,14 @@ class FullScreen(ui.Host):
         if not (self.app and self.loop):
             return fn()
 
+        def with_terminal():
+            if self.capture is None:
+                return fn()
+            with self.capture.released():
+                return fn()
+
         async def go():
-            return await run_in_terminal(fn, in_executor=True)
+            return await run_in_terminal(with_terminal, in_executor=True)
 
         return asyncio.run_coroutine_threadsafe(go(), self.loop).result()
 
@@ -574,7 +669,13 @@ class FullScreen(ui.Host):
         ui.console = Console(file=self.log, force_terminal=True, color_system="truecolor", theme=ui.theme,
                              highlight=False, width=min(self.width(), ui.MAX_WIDTH))
         ui.host = self
-        self.app = self.build()
+        output = None
+        if self.session.pt_output is None:  # a real terminal: fence off stray writes
+            from prompt_toolkit.output import create_output
+
+            self.capture = StdCapture(self.log)
+            output = create_output(stdout=self.capture.start())
+        self.app = self.build(output)
 
         async def main():
             self.loop = asyncio.get_running_loop()
@@ -586,5 +687,7 @@ class FullScreen(ui.Host):
         try:
             asyncio.run(main())
         finally:
+            if self.capture is not None:
+                self.capture.stop()
             ui.console, ui.host = saved_console, saved_host
         return self.log.text()
