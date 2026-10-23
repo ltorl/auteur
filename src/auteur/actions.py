@@ -71,37 +71,16 @@ def interactive() -> bool:
     return sys.stdin.isatty() and sys.stdout.isatty()
 
 
-_QSTYLE = None
-
-
-def qstyle():
-    global _QSTYLE
-    if _QSTYLE is None:
-        from questionary import Style
-
-        _QSTYLE = Style([("qmark", f"fg:{ui.AMBER} bold"), ("question", "bold"), ("answer", f"fg:{ui.AMBER} bold"),
-                         ("pointer", f"fg:{ui.AMBER} bold"), ("highlighted", f"fg:{ui.AMBER} bold"),
-                         ("selected", f"fg:{ui.TEAL}"), ("instruction", f"fg:{ui.SMOKE}")])
-    return _QSTYLE
-
-
 def choose(question: str, choices: list[str], default: str | None = None, icon: str = "▸") -> str | None:
-    import questionary
-
-    return questionary.select(question, choices=choices, default=default, style=qstyle(), qmark=icon).ask()
+    return ui.select(question, choices, default)
 
 
 def confirm(question: str, default: bool = True) -> bool:
-    import questionary
-
-    return bool(questionary.confirm(question, default=default, style=qstyle(), qmark="?").ask())
+    return ui.confirm(question, default)
 
 
 def text(question: str, icon: str = "✎", secret: bool = False) -> str | None:
-    import questionary
-
-    fn = questionary.password if secret else questionary.text
-    return fn(question, style=qstyle(), qmark=icon).ask()
+    return ui.ask_text(question, secret)
 
 
 def next_steps(p: Project, storyboard: bool = True) -> None:
@@ -192,7 +171,7 @@ def _art(s: Studio, label: str, run, total: int) -> None:
     """Run an image batch with live count; collapse refusals into one message."""
     from .studio import ImagesUnavailable
 
-    with ui.console.status(f"[ink]{label}…", spinner="dots") as st:
+    with ui.status(f"[ink]{label}…") as st:
         n = [0]
 
         def done(name, path, err):
@@ -262,7 +241,7 @@ def do_shoot(s: Studio, p: Project, ids=None, backend=None, quality=None, force=
 
 def do_cut(s: Studio, p: Project, titles=True, music=None, open_after=False) -> Path:
     ui.section("Final cut", "✂")
-    with ui.console.status("[ink]Cutting…", spinner="dots") as st:
+    with ui.status("[ink]Cutting…") as st:
         out = s.cut(p, titles=titles, music=music, on_step=lambda m: st.update(f"[ink]{m}…"))
     ui.ok("Premiere ready")
     ui.console.print(Text.assemble(("    ", ""), ui.path_link(out)))
@@ -370,7 +349,7 @@ def login_chatgpt() -> None:
     ui.section("Sign in · ChatGPT", "🔑")
     ui.info("opens your browser — credentials are stored in ~/.codex (shared with the Codex CLI)")
     try:
-        code = oauth_login()
+        code = ui.external(oauth_login)
     except ProxyError as e:
         raise Abort(str(e), e.hint) from None
     if code != 0 or not codex_auth_file().exists():
@@ -466,7 +445,7 @@ def proxy(action: str = "status") -> None:
         if not codex_auth_file().exists():
             raise Abort("not signed in to ChatGPT", "/login")
         try:
-            with ui.console.status("[ink]Starting openai-oauth…"):
+            with ui.status("[ink]Starting openai-oauth…"):
                 start_proxy(s.base_url)
         except ProxyError as e:
             raise Abort(str(e), e.hint) from None
@@ -503,7 +482,7 @@ def fetch(hq: bool = True, compress: str | None = None, yes: bool = False) -> No
             raise Abort("not signed in to Hugging Face",
                         f"accept the license at https://huggingface.co/{HF_REPO}, then /login hf")
         try:
-            with ui.console.status("[ink]Reading the model index…"):
+            with ui.status("[ink]Reading the model index…"):
                 files = W.plan(dest, hq=hq)
                 sizes = W.sizes(files)
         except W.GatedError:
@@ -530,14 +509,14 @@ def fetch(hq: bool = True, compress: str | None = None, yes: bool = False) -> No
             TextColumn("[dim]eta"), TimeRemainingColumn(), TextColumn("[dim]{task.fields[files]}"),
             console=ui.console, expand=True,
         )
-        with bar:
+        with ui.live(lambda: bar, fps=4):
             task = bar.add_task("weights", total=total, completed=have, files="")
             W.download(dest, files, on_progress=lambda p: bar.update(
                 task, completed=p.done_bytes, files=f"{p.done_files}/{p.total_files} files"))
         ui.ok("weights ready  (safe to interrupt and re-run /fetch at any point — it resumes)")
     from .render.ltx import verify
 
-    with ui.console.status("[ink]Checking the checkpoint against the model…"):
+    with ui.status("[ink]Checking the checkpoint against the model…"):
         gaps = {c: m for c, m in verify(dest).items() if m}
     if gaps:
         detail = "; ".join(f"{c}: {len(m)} unmatched (e.g. {m[0]})" for c, m in gaps.items())
@@ -547,7 +526,7 @@ def fetch(hq: bool = True, compress: str | None = None, yes: bool = False) -> No
     if compress == "fp8":
         from .render.ltx import build_caches
 
-        with ui.console.status("[ink]Splitting layers…", spinner="dots") as st:
+        with ui.status("[ink]Splitting layers…") as st:
             build_caches(dest, Path(s.layer_cache).expanduser(), compress,
                          on_progress=lambda c, i, n: st.update(f"[ink]Layer cache · {c} {i}/{n}"))
         ui.ok(f"{compress} layer cache ready in {ui.tilde(s.layer_cache)}")

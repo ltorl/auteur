@@ -25,6 +25,7 @@ def env(tmp_path, monkeypatch):
 
 
 def drive(*lines, **kw) -> Session:
+    """Type each line + Enter into the full-screen app; lines sent while busy are queued."""
     with create_pipe_input() as inp:
         inp.send_text("".join(line + "\r" for line in lines))
         s = Session(pt_input=inp, pt_output=DummyOutput(), **kw)
@@ -45,7 +46,7 @@ def test_full_film_from_the_prompt(env, capsys):
         "/nonsense",
         "/exit",
     )
-    out = capsys.readouterr().out
+    out = s.transcript
     assert "Welcome to Auteur" in out and "/login" in out
     assert "THE LAST LAMPLIGHTER" in out
     assert "Locked off S02" in out
@@ -59,8 +60,7 @@ def test_full_film_from_the_prompt(env, capsys):
 
 
 def test_errors_keep_the_session_alive(env, capsys):
-    drive("/shots", "/shoot -q ultra", "/config nope 1", "/new -d", "/status", "/exit")
-    out = capsys.readouterr().out
+    out = drive("/shots", "/shoot -q ultra", "/config nope 1", "/new -d", "/status", "/exit").transcript
     assert "no film yet" in out
     assert "unknown setting 'nope'" in out
     assert "-d needs a value" in out
@@ -71,7 +71,7 @@ def test_resume_latest(env, capsys):
     drive("a lamplighter's last night", "/exit")
     s = drive("/shots", "/exit", resume=True)
     assert s.project and s.project.slug.startswith("a-lamplighter")
-    assert "resuming" in capsys.readouterr().out
+    assert "resuming" in s.transcript
 
 
 def _complete(session, text):
@@ -101,7 +101,7 @@ def test_images_refused_still_makes_the_film(env, capsys, monkeypatch):
     srv.image_status = 403
     monkeypatch.setenv("AUTEUR_BACKEND", "animatic")
     s = drive("a lamplighter's last night", "/roll", "/board", "/exit")
-    out = capsys.readouterr().out
+    out = s.transcript
     assert out.count("ChatGPT refused image generation") == 2  # once for /roll, once for /board
     assert "Error code: 403" not in out                       # no per-shot error spam
     image_calls = [p for p, _ in srv.calls if "/images/" in p]
@@ -115,16 +115,14 @@ def test_roll_checks_the_camera_before_spending_calls(env, capsys, monkeypatch, 
     monkeypatch.setenv("AUTEUR_WEIGHTS", str(tmp_path / "no-weights"))
     drive("a lamplighter's last night", "/exit")
     before = len(srv.calls)
-    drive("/roll", "/exit")
-    out = capsys.readouterr().out
+    out = drive("/roll", "/exit").transcript
     assert "isn't downloaded yet" in out and "/fetch" in out
     assert "opened your latest film" in out                    # /roll with nothing open picks the latest
     assert len(srv.calls) == before                            # failed fast: no director or image calls
 
 
 def test_typo_suggestions(env, capsys):
-    drive("/rol", "/opem", "/storybord", "/exit")
-    out = capsys.readouterr().out
+    out = drive("/rol", "/opem", "/storybord", "/exit").transcript
     assert "did you mean /roll?" in out
     assert "did you mean /open?" in out
     assert "did you mean /board?" in out                       # via the alias 'storyboard'

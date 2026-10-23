@@ -285,6 +285,102 @@ def project_list(projects: list[Project]) -> Table:
     return t
 
 
+# ---- host: where live views and questions go ---------------------------------- #
+#
+# The full-screen app installs itself as the host so spinners, progress bars and
+# questions render inside it. Without a host (scripts, pipes) we fall back to
+# Rich's Live and questionary.
+
+
+class Host:
+    def live_push(self, get) -> None: ...
+    def live_pop(self, get) -> None: ...
+    def select(self, question: str, choices: list[str], default: str | None) -> str | None: ...
+    def text(self, question: str, secret: bool) -> str | None: ...
+    def external(self, fn): ...
+    def clear(self) -> None: ...
+
+
+host: Host | None = None
+
+
+@contextlib.contextmanager
+def live(get, transient: bool = True, fps: int = 10) -> Iterator:
+    """Show ``get()`` live while the block runs; keep the last frame unless transient."""
+    if host is not None:
+        host.live_push(get)
+        try:
+            yield
+        finally:
+            host.live_pop(get)
+            if not transient:
+                console.print(get())
+        return
+    with Live(get(), console=console, refresh_per_second=fps, transient=transient, get_renderable=get):
+        yield
+
+
+class _Status:
+    def __init__(self, text: str):
+        self.text = text
+        self.frames = itertools.cycle("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
+
+    def update(self, text: str) -> None:
+        self.text = text
+
+    def view(self) -> Text:
+        return Text.assemble((f"  {next(self.frames)} ", "accent"), Text.from_markup(self.text, style="ink"))
+
+
+@contextlib.contextmanager
+def status(text: str) -> Iterator[_Status]:
+    """A one-line spinner; ``.update()`` changes its text (Rich markup allowed)."""
+    st = _Status(text)
+    with live(st.view, fps=12):
+        yield st
+
+
+def select(question: str, choices: list[str], default: str | None = None) -> str | None:
+    if host is not None:
+        return host.select(question, choices, default)
+    import questionary
+
+    return questionary.select(question, choices=choices, default=default, style=_qstyle(), qmark="▸").ask()
+
+
+def ask_text(question: str, secret: bool = False) -> str | None:
+    if host is not None:
+        return host.text(question, secret)
+    import questionary
+
+    fn = questionary.password if secret else questionary.text
+    return fn(question, style=_qstyle(), qmark="✎").ask()
+
+
+def confirm(question: str, default: bool = True) -> bool:
+    yes, no = "Yes", "No"
+    return select(question, [yes, no] if default else [no, yes], yes if default else no) == yes
+
+
+def external(fn):
+    """Run ``fn`` with the real terminal (interactive subprocesses)."""
+    return host.external(fn) if host is not None else fn()
+
+
+_QSTYLE = None
+
+
+def _qstyle():
+    global _QSTYLE
+    if _QSTYLE is None:
+        from questionary import Style
+
+        _QSTYLE = Style([("qmark", f"fg:{AMBER} bold"), ("question", "bold"), ("answer", f"fg:{AMBER} bold"),
+                         ("pointer", f"fg:{AMBER} bold"), ("highlighted", f"fg:{AMBER} bold"),
+                         ("selected", f"fg:{TEAL}"), ("instruction", f"fg:{SMOKE}")])
+    return _QSTYLE
+
+
 # ---- live feedback ------------------------------------------------------------ #
 
 REEL = ["◐", "◓", "◑", "◒"]
@@ -305,7 +401,7 @@ def thinking(label: str) -> Iterator:
     def progress(n: int, tail: str) -> None:
         state["n"], state["tail"] = n, tail
 
-    with Live(view(), console=console, refresh_per_second=12, transient=True, get_renderable=view):
+    with live(view, fps=12):
         yield progress
     ok(f"{label} — {time.time() - state['t0']:.0f}s")
 
@@ -328,18 +424,18 @@ class RenderView:
         self.steps = self.progress.add_task("denoise", total=8, extra="", visible=False)
         self.blocks = self.progress.add_task("stream", total=1, extra="", visible=False)
         self.phase = Text("", style="dim")
-        self.live = Live(self._view(), console=console, refresh_per_second=10, get_renderable=self._view)
+        self._cm = live(self._view, transient=False)
 
     def _view(self):
         return Panel(Group(self.progress, self.phase), border_style=SMOKE, box=box.ROUNDED,
                      title=Text(" CAMERA ROLLING ", style=f"bold {NIGHT} on {ROSE}"), title_align="left")
 
     def __enter__(self):
-        self.live.__enter__()
+        self._cm.__enter__()
         return self
 
     def __exit__(self, *exc):
-        self.live.__exit__(*exc)
+        return self._cm.__exit__(*exc)
 
     def __call__(self, e) -> None:
         if e.kind == "phase":

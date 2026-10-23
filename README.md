@@ -42,7 +42,19 @@ From a checkout, run `./install.sh`. To uninstall: `uv tool uninstall auteur`.
 
 ## The session
 
-Run `auteur`. It works like Claude Code or Codex: a persistent prompt with slash commands.
+Run `auteur`. It opens full-screen, like Claude Code or Codex: output scrolls above, the input
+bar stays pinned at the bottom, and your shell comes back untouched when you exit.
+
+```
+  …output: treatment, shot list, storyboard thumbnails, renders…
+  ⠹ Boarding 3/8 shots…                 ← live area: spinners, progress, pickers, queued messages
+──────────────────────────────────────────────────────────────────────────────
+› make @S03 a slow push-in▌
+──────────────────────────────────────────────────────────────────────────────
+ ◆ the-door-below · 3/8 shot │ director ● gpt-6-luna │ camera airstream·draft │ 16:9
+```
+
+Type plain text or slash commands:
 
 ```
 › a lighthouse keeper finds a door in the sea        ← an idea starts a film
@@ -65,8 +77,13 @@ Other session features:
   and models. Type `@` to mention a shot.
 - **Status line** at the bottom: open film and progress, director model and whether it's
   online, camera settings.
-- **Keys:** Esc then Enter inserts a newline. Ctrl-C cancels the running step; press it twice
-  to quit. Ctrl-D exits. History is kept in `~/.config/auteur/history`.
+- **Keys:** Esc then Enter inserts a newline. Ctrl-C interrupts the running step; on an empty
+  prompt, press it twice to quit. Ctrl-D exits, Ctrl-L clears. History is kept in
+  `~/.config/auteur/history`.
+- **Scrolling:** mouse wheel, PageUp/PageDown or Shift-↑/↓; End jumps back to the newest output.
+  The mouse wheel captures the mouse, so hold ⌥ (iTerm2) or Fn (Terminal.app) to select text,
+  or turn it off with `/config mouse false`.
+- **Keep typing:** anything you submit while a step is running is queued and runs next.
 - **Resuming:** `auteur -c` reopens your last film; `auteur -p <film>` opens a specific one.
 
 ### First run

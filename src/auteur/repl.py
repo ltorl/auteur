@@ -10,7 +10,6 @@ from __future__ import annotations
 import shlex
 import shutil
 import sys
-import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -100,9 +99,9 @@ class Session:
     pt_output: object | None = None
     project: Project | None = None
     running: bool = True
+    transcript: str = ""
     _models: list[str] = field(default_factory=list)
     _online: bool = False
-    _last_interrupt: float = 0.0
 
     def __post_init__(self):
         self.studio = A.studio()
@@ -217,73 +216,18 @@ class Session:
         return [("class:placeholder", f"Give the director a note on “{self.project.title}”, or / for commands")]
 
     # -- loop -------------------------------------------------------------------- #
-    def _prompt_session(self):
-        from prompt_toolkit import PromptSession
-        from prompt_toolkit.history import FileHistory, InMemoryHistory
-        from prompt_toolkit.key_binding import KeyBindings
-        from prompt_toolkit.styles import Style
-
-        kb = KeyBindings()
-
-        @kb.add("escape", "enter")
-        def _newline(event):
-            event.current_buffer.insert_text("\n")
-
-        style = Style.from_dict({
-            "prompt": f"{ui.AMBER} bold",
-            "placeholder": ui.SMOKE,
-            "bottom-toolbar": f"bg:{ui.NIGHT} {ui.SMOKE} noreverse",
-            "tb": f"bg:{ui.NIGHT} {ui.SMOKE}",
-            "tb.film": f"bg:{ui.AMBER} {ui.NIGHT} bold",
-            "tb.on": f"bg:{ui.NIGHT} #7BD88F",
-            "tb.off": f"bg:{ui.NIGHT} {ui.ROSE}",
-            "tb.hint": f"bg:{ui.NIGHT} #5a564f",
-            "completion-menu": f"bg:{ui.NIGHT}",
-            "completion-menu.completion": f"bg:{ui.NIGHT} {ui.INK}",
-            "completion-menu.completion.current": f"bg:{ui.AMBER} {ui.NIGHT} bold",
-            "completion-menu.meta.completion": f"bg:{ui.NIGHT} {ui.SMOKE}",
-            "completion-menu.meta.completion.current": f"bg:{ui.AMBER} {ui.NIGHT}",
-        })
-        try:
-            path = cfg.config_path().parent / "history"
-            path.parent.mkdir(parents=True, exist_ok=True)
-            history = FileHistory(str(path))
-        except OSError:
-            history = InMemoryHistory()
-        return PromptSession(
-            history=history,
-            completer=SlashCompleter(self),
-            complete_while_typing=True,
-            key_bindings=kb,
-            style=style,
-            bottom_toolbar=self.toolbar,
-            placeholder=self.placeholder,
-            input=self.pt_input,
-            output=self.pt_output,
-            reserve_space_for_menu=8,
-        )
-
     def run(self) -> None:
-        self.welcome()
-        self.refresh()
+        """Full-screen when attached to a terminal (or driven by tests); plain lines otherwise."""
         if self.pt_input is None and not (sys.stdin.isatty() and sys.stdout.isatty()):
-            return self._run_plain()
-        ps = self._prompt_session()
-        while self.running:
-            try:
-                ui.console.print()
-                line = ps.prompt([("class:prompt", "› ")])
-            except KeyboardInterrupt:
-                if time.time() - self._last_interrupt < 2:
-                    break
-                self._last_interrupt = time.time()
-                ui.console.print(Text("  (press Ctrl-C again to exit)", style="dim"))
-                continue
-            except EOFError:
-                break
-            self.handle(line)
+            self.welcome()
             self.refresh()
-        ui.console.print(Text("\n  ✻ that's a wrap.\n", style="accent"))
+            return self._run_plain()
+        from .tui import FullScreen
+
+        self.transcript = FullScreen(self).run()
+        if self.pt_input is None:  # back on the normal screen: leave a one-line receipt
+            where = f"  ·  {self.project.title}" if self.project else ""
+            ui.console.print(Text.assemble(("✻ ", "accent"), ("that's a wrap", "ink"), (where, "dim")))
 
     def _run_plain(self) -> None:
         """Piped input: one line per prompt, no line editor."""
@@ -661,7 +605,10 @@ def cmd_help(s: Session, argv):
 
 @command("clear", "clear the screen", "Session")
 def cmd_clear(s: Session, argv):
-    ui.console.clear()
+    if ui.host is not None:
+        ui.host.clear()
+    else:
+        ui.console.clear()
     if s.project:
         ui.console.print(Text.assemble(("  ◆ ", "accent"), (s.project.title, "title")))
 

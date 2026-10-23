@@ -5,3 +5,4 @@ __pycache__/
 dist/
 projects/
 *.mp4
+.DS_Store

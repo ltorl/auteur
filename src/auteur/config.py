@@ -26,6 +26,7 @@ class Settings(BaseModel):
     image_model: str = ""
     reasoning_effort: str = ""  # low | medium | high, if the model takes it
     auto_proxy: bool = True  # start `npx openai-oauth` when it isn't running
+    mouse: bool = True  # wheel scrolling in the full-screen session (hold ⌥/Shift to select text)
     storyboard: bool = True  # draw cast sheets + keyframes; off = LTX shoots text-to-video
 
     # studio
