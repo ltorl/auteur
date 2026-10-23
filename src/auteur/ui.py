@@ -9,7 +9,6 @@ from collections.abc import Iterator
 from pathlib import Path
 
 from rich import box
-from rich.align import Align
 from rich.columns import Columns
 from rich.console import Console, Group, RenderableType
 from rich.live import Live
@@ -99,17 +98,17 @@ def wordmark() -> Text:
 
 
 def film_strip(width: int) -> Text:
-    return Text(("▆ " * (width // 2 + 1))[:width], style=f"{SMOKE} on {NIGHT}")
+    return Text(("▆ " * (width // 2 + 1))[:width], style=SMOKE)
 
 
 def banner(subtitle: str | None = None) -> None:
     mark = wordmark()
     w = max(len(line) for line in mark.plain.splitlines())
     tag = Text.assemble(("an AI film director in your terminal", "ink"), ("  ·  ", "dim"), (f"v{__version__}", "dim"))
-    strip = Align.center(film_strip(w + 6))
-    sub = [Align.center(Text(subtitle, style="dim"))] if subtitle else []
-    body = Group(strip, Text(""), Align.center(mark), Text(""), Align.center(tag), *sub, Text(""), strip)
-    console.print(Padding(body, (1, 2, 0, 2)))
+    strip = film_strip(w + 2)
+    sub = [Text(subtitle, style="dim")] if subtitle else []
+    body = Group(strip, Text(""), mark, Text(""), tag, *sub, Text(""), strip)
+    console.print(Padding(body, (1, 0, 0, 0)))
 
 
 def section(title: str, icon: str = "◆") -> None:

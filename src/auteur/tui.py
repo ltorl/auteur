@@ -31,7 +31,7 @@ from prompt_toolkit.filters import Condition
 from prompt_toolkit.formatted_text import ANSI, to_formatted_text
 from prompt_toolkit.history import FileHistory, InMemoryHistory
 from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.layout import (ConditionalContainer, Float, FloatContainer, HSplit, Layout, VSplit, Window)
+from prompt_toolkit.layout import (Float, FloatContainer, HSplit, Layout, VSplit, Window)
 from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
 from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.layout.menus import CompletionsMenu
@@ -104,22 +104,38 @@ class LogBuffer(io.TextIOBase):
         with self._lock:
             return "\n".join(self.plain)
 
-    def window(self, height: int, offset: int) -> tuple[list[tuple[str, str]], int]:
-        """Fragments for the ``height`` lines ending ``offset`` lines above the bottom."""
+    def window(self, height: int, offset: int, extra: list[list[tuple[str, str]]] | None = None
+               ) -> tuple[list[tuple[str, str]], int]:
+        """Fragments for ``height`` lines ending ``offset`` lines above the bottom.
+
+        Output is top-anchored: it starts at the top of the screen and, once it
+        fills the window, the newest lines stay in view. ``extra`` lines (the
+        live area) follow the log as if they were its last lines.
+        """
         with self._lock:
             lines = self.lines[:-1] if not self.lines[-1] else self.lines  # drop trailing empty line
+            lines = lines + (extra or [])
             total = len(lines)
             offset = max(0, min(offset, total - height)) if total > height else 0
             end = total - offset
             view = lines[max(0, end - height):end]
         frags: list[tuple[str, str]] = []
-        for _ in range(height - len(view)):  # newest output sits right above the input bar
-            frags.append(("", "\n"))
         for i, line in enumerate(view):
             frags.extend(line)
             if i < len(view) - 1:
                 frags.append(("", "\n"))
         return frags, offset
+
+
+def split_lines(frags: list[tuple[str, str]]) -> list[list[tuple[str, str]]]:
+    lines: list[list[tuple[str, str]]] = [[]]
+    for style, text, *_ in frags:
+        for i, part in enumerate(text.split("\n")):
+            if i:
+                lines.append([])
+            if part:
+                lines[-1].append((style, part))
+    return lines
 
 
 def render_ansi(renderable, width: int) -> list[tuple[str, str]]:
@@ -237,11 +253,14 @@ class FullScreen(ui.Host):
     def log_fragments(self):
         info = self.log_window.render_info
         h = info.window_height if info else max(5, self.height() - 6)
+        live = self.live_fragments() if self.has_live() else []
         key = (self.log.version, self.offset, h)
-        if self._log_cache and self._log_cache[0] == key:
+        if not live and self._log_cache and self._log_cache[0] == key:
             return self._log_cache[1]
-        frags, self.offset = self.log.window(h, self.offset)
-        self._log_cache = (key, frags)
+        extra = [[]] + split_lines(live) if live else None  # a blank line between output and live area
+        frags, self.offset = self.log.window(h, self.offset, extra)
+        if not live:
+            self._log_cache = (key, frags)
         return frags
 
     def live_fragments(self):
@@ -297,11 +316,6 @@ class FullScreen(ui.Host):
     # -- layout ------------------------------------------------------------------------ #
     def build(self) -> Application:
         self.log_window = Window(LogControl(self), wrap_lines=False, always_hide_cursor=True)
-        live = ConditionalContainer(
-            Window(FormattedTextControl(self.live_fragments), dont_extend_height=True, wrap_lines=False,
-                   height=lambda: Dimension(max=max(3, self.height() // 2))),
-            filter=Condition(self.has_live),
-        )
         secret = Condition(lambda: bool(self.question and self.question.secret))
         input_window = Window(
             BufferControl(self.input, input_processors=[
@@ -312,11 +326,10 @@ class FullScreen(ui.Host):
         )
         body = HSplit([
             self.log_window,
-            live,
             Window(FormattedTextControl(lambda: self.rule(True)), height=1),
             VSplit([Window(FormattedTextControl(self.prompt), width=2, dont_extend_width=True), input_window]),
             Window(FormattedTextControl(lambda: self.rule(False)), height=1),
-            Window(FormattedTextControl(self.session.toolbar), height=1, style="class:bottom-toolbar"),
+            Window(FormattedTextControl(self.session.toolbar), height=1, style="class:status"),
         ])
         root = FloatContainer(body, floats=[
             Float(xcursor=True, ycursor=True, content=CompletionsMenu(max_height=12, scroll_offset=1)),
@@ -348,12 +361,15 @@ class FullScreen(ui.Host):
             "q.opt": ui.INK,
             "hint": ui.SMOKE,
             "queued": f"{ui.INK} italic",
-            "bottom-toolbar": f"bg:{ui.NIGHT} {ui.SMOKE}",
-            "tb": f"bg:{ui.NIGHT} {ui.SMOKE}",
-            "tb.film": f"bg:{ui.AMBER} {ui.NIGHT} bold",
-            "tb.on": f"bg:{ui.NIGHT} #7BD88F",
-            "tb.off": f"bg:{ui.NIGHT} {ui.ROSE}",
-            "tb.hint": f"bg:{ui.NIGHT} #5a564f",
+            # Transparent status line (no bg, no reverse) so it matches any terminal theme.
+            "status": "noreverse",
+            "tb": ui.SMOKE,
+            "tb.sep": "#4a4741",
+            "tb.film": f"{ui.AMBER} bold",
+            "tb.value": ui.INK,
+            "tb.on": "#7BD88F",
+            "tb.off": ui.ROSE,
+            "tb.hint": "#6b675f",
             "completion-menu": f"bg:{ui.NIGHT}",
             "completion-menu.completion": f"bg:{ui.NIGHT} {ui.INK}",
             "completion-menu.completion.current": f"bg:{ui.AMBER} {ui.NIGHT} bold",

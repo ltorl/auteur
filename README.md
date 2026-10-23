@@ -42,8 +42,9 @@ From a checkout, run `./install.sh`. To uninstall: `uv tool uninstall auteur`.
 
 ## The session
 
-Run `auteur`. It opens full-screen, like Claude Code or Codex: output scrolls above, the input
-bar stays pinned at the bottom, and your shell comes back untouched when you exit.
+Run `auteur`. It opens full-screen, like Claude Code or Codex: output starts at the top and
+flows down, the input bar stays pinned at the bottom, and your shell comes back untouched when
+you exit.
 
 ```
   …output: treatment, shot list, storyboard thumbnails, renders…
@@ -51,7 +52,7 @@ bar stays pinned at the bottom, and your shell comes back untouched when you exi
 ──────────────────────────────────────────────────────────────────────────────
 › make @S03 a slow push-in▌
 ──────────────────────────────────────────────────────────────────────────────
- ◆ the-door-below · 3/8 shot │ director ● gpt-6-luna │ camera airstream·draft │ 16:9
+ ◆ the-door-below  3/8 shot  ·  director ● gpt-6-luna  ·  camera airstream · draft  ·  16:9
 ```
 
 Type plain text or slash commands:

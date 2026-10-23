@@ -189,25 +189,34 @@ class Session:
             self.next()
 
     def toolbar(self):
+        """Status line: plain colored text on the terminal's own background."""
+        cols = shutil.get_terminal_size().columns
         p = self.project
-        if p:
-            n = len(p.shots)
+        name = p.slug if p else "no film"
+        if len(name) > 28:
+            name = name[:27] + "…"
+        film = [("class:tb.film", f" ◆ {name}")]
+        if p and p.shots:
             shot = sum(s.status == "shot" for s in p.shots)
-            film = f" ◆ {p.slug} " + (f"· {shot}/{n} shot " if n else "· treatment ")
-        else:
-            film = " ◆ no film "
+            film += [("class:tb", "  "), ("class:tb.value", f"{shot}/{len(p.shots)}"), ("class:tb", " shot")]
+        elif p:
+            film += [("class:tb", "  treatment")]
         model = self.studio.llm.text_model if self._models else (self.settings.text_model or "auto")
-        dot = "●" if self._online else "○"
-        rest = f"{model} │ camera {self.settings.backend}·{self.settings.quality} │ {self.settings.aspect} "
-        parts = [
-            ("class:tb.film", film),
-            ("class:tb", "│ director "),
-            ("class:tb.on" if self._online else "class:tb.off", f"{dot} "),
-            ("class:tb", rest),
+        segments = [  # in order of importance; trailing ones are dropped when the line is too narrow
+            [("class:tb", "director "), ("class:tb.on" if self._online else "class:tb.off",
+                                         "● " if self._online else "○ "), ("class:tb.value", model)],
+            [("class:tb", "camera "), ("class:tb.value", f"{self.settings.backend} · {self.settings.quality}")],
+            [("class:tb.value", self.settings.aspect)],
         ]
-        hint = "  / commands · @ shots · esc⏎ newline "
-        if sum(len(t) for _, t in parts) + len(hint) <= shutil.get_terminal_size().columns:
-            parts.append(("class:tb.hint", hint))
+        width = lambda frags: sum(len(t) for _, t in frags)  # noqa: E731
+        sep = [("class:tb.sep", "  ·  ")]
+        while segments and width(film) + sum(width(sg) + 5 for sg in segments) > cols - 1:
+            segments.pop()
+        parts = film + [f for sg in segments for f in sep + sg]
+        hint = "/ commands  @ shots  esc⏎ newline "
+        used = width(parts)
+        if used + len(hint) + 2 <= cols:
+            parts += [("class:tb", " " * (cols - used - len(hint))), ("class:tb.hint", hint)]
         return parts
 
     def placeholder(self):
