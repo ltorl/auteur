@@ -18,6 +18,10 @@ from .store import Store
 ItemDone = Callable[[str, Path | None, Exception | None], None]
 
 
+class ImagesUnavailable(RuntimeError):
+    """The image endpoint refused us (plan / entitlement), so stop asking."""
+
+
 def shot_seed(project: Project, shot_id: str) -> int:
     return int(hashlib.sha256(f"{project.slug}:{shot_id}".encode()).hexdigest()[:8], 16)
 
@@ -31,6 +35,7 @@ class Studio:
         self.settings = settings
         self.store = store or Store(settings.home_path)
         self.llm = llm or LLM(settings)
+        self.images_blocked: str | None = None
 
     # ---- writing ------------------------------------------------------------ #
     def create(self, idea: str, template: str, seconds: int, aspect: str, style: str = "") -> Project:
@@ -135,7 +140,8 @@ class Studio:
 
         def job(c):
             prompt = prompts.CAST_SHEET.format(name=c.name, look=c.look, style=self._style(p))
-            return imagery.generate(self.llm.client, model, prompt, "1536x1024", d / "cast" / f"{c.id}.png")
+            return self._image(imagery.generate, self.llm.client, model, prompt, "1536x1024",
+                               d / "cast" / f"{c.id}.png")
 
         for c, path, err in self._parallel(todo, job, workers):
             if path:
@@ -172,12 +178,12 @@ class Studio:
             prompt = self.keyframe_prompt(p, s)
             refs = [self.store.rel(p, p.cast_sheets[c]) for c in s.characters if c in p.cast_sheets][:4]
             refs = [r for r in refs if r and r.exists()]
-            if refs:
+            if refs and not self.images_blocked:
                 try:
                     return imagery.edit(self.llm.client, model, prompt, refs, size, out)
                 except Exception:
                     pass  # some accounts/models reject edits — fall back to plain generation
-            return imagery.generate(self.llm.client, model, prompt, size, out)
+            return self._image(imagery.generate, self.llm.client, model, prompt, size, out)
 
         for s, path, err in self._parallel(todo, job, workers):
             if path:
@@ -189,6 +195,21 @@ class Studio:
             self.store.save(p)
             if on_item:
                 on_item(s.id, path, err)
+
+    def _image(self, fn, *args):
+        """Call the image endpoint; the first refusal blocks the rest of the batch."""
+        if self.images_blocked:
+            raise ImagesUnavailable(self.images_blocked)
+        try:
+            return fn(*args)
+        except Exception as e:
+            status = getattr(e, "status_code", None)
+            if status in (401, 403, 404):
+                body = getattr(e, "body", None)
+                detail = body.get("detail") if isinstance(body, dict) else None
+                self.images_blocked = f"{status} {detail or type(e).__name__}"
+                raise ImagesUnavailable(self.images_blocked) from e
+            raise
 
     def _exists(self, p: Project, rel: str | None) -> bool:
         path = self.store.rel(p, rel)

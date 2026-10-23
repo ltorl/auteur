@@ -64,6 +64,7 @@ def root(
     resume: Annotated[bool, typer.Option("--continue", "-c", help="Reopen your most recent film.")] = False,
     version: Annotated[bool, typer.Option("--version", "-v", help="Print the version.")] = False,
 ) -> None:
+    ui.fit()
     if version:
         from . import __version__
 

@@ -61,7 +61,7 @@ def test_full_film_from_the_prompt(env, capsys):
 def test_errors_keep_the_session_alive(env, capsys):
     drive("/shots", "/shoot -q ultra", "/config nope 1", "/new -d", "/status", "/exit")
     out = capsys.readouterr().out
-    assert "no film open" in out
+    assert "no film yet" in out
     assert "unknown setting 'nope'" in out
     assert "-d needs a value" in out
     assert "ChatGPT" in out and "camera" in out
@@ -93,3 +93,38 @@ def test_parsing():
     assert split("the vault's heist") == ["the", "vault's", "heist"]
     assert opts(["S01", "-b", "animatic", "-f"], {"-b": "backend"}, {"-f": "force"}) == (
         ["S01"], {"backend": "animatic", "force": True})
+
+
+def test_images_refused_still_makes_the_film(env, capsys, monkeypatch):
+    """Real-world: ChatGPT plan without image generation answers 403 Forbidden."""
+    srv, tmp = env
+    srv.image_status = 403
+    monkeypatch.setenv("AUTEUR_BACKEND", "animatic")
+    s = drive("a lamplighter's last night", "/roll", "/board", "/exit")
+    out = capsys.readouterr().out
+    assert out.count("ChatGPT refused image generation") == 2  # once for /roll, once for /board
+    assert "Error code: 403" not in out                       # no per-shot error spam
+    image_calls = [p for p, _ in srv.calls if "/images/" in p]
+    assert 1 <= len(image_calls) <= 3                          # first wave only, then we stop asking
+    assert s.project.final and all(x.status == "shot" and not x.keyframe for x in s.project.shots)
+
+
+def test_roll_checks_the_camera_before_spending_calls(env, capsys, monkeypatch, tmp_path):
+    srv, _ = env
+    monkeypatch.setenv("AUTEUR_BACKEND", "airstream")
+    monkeypatch.setenv("AUTEUR_WEIGHTS", str(tmp_path / "no-weights"))
+    drive("a lamplighter's last night", "/exit")
+    before = len(srv.calls)
+    drive("/roll", "/exit")
+    out = capsys.readouterr().out
+    assert "isn't downloaded yet" in out and "/fetch" in out
+    assert "opened your latest film" in out                    # /roll with nothing open picks the latest
+    assert len(srv.calls) == before                            # failed fast: no director or image calls
+
+
+def test_typo_suggestions(env, capsys):
+    drive("/rol", "/opem", "/storybord", "/exit")
+    out = capsys.readouterr().out
+    assert "did you mean /roll?" in out
+    assert "did you mean /open?" in out
+    assert "did you mean /board?" in out                       # via the alias 'storyboard'

@@ -47,6 +47,14 @@ theme = Theme(
     }
 )
 console = Console(theme=theme, highlight=False)
+MAX_WIDTH = 120
+
+
+def fit() -> None:
+    """Cap output width: on very wide terminals tables and rules get unreadable."""
+    import shutil
+
+    console.width = min(shutil.get_terminal_size((100, 40)).columns, MAX_WIDTH)
 
 LETTERS = {
     "A": [" █████╗ ", "██╔══██╗", "███████║", "██╔══██║", "██║  ██║", "╚═╝  ╚═╝"],

@@ -110,3 +110,22 @@ def test_airstream_matches_dense(tmp_path, compress):
     assert all(p.device.type == "meta" for b in m.blocks for p in b.parameters())
     s.release()
     assert m.emb.weight.device.type == "meta"
+
+
+def test_weights_progress_and_completion(tmp_path):
+    import json
+
+    from auteur import weights as W
+
+    W.save_plan(tmp_path, {"transformer/a.safetensors": 10, "vae/b.safetensors": 30})
+    assert not W.present(tmp_path)
+    (tmp_path / "transformer").mkdir()
+    (tmp_path / "transformer" / "a.safetensors").write_bytes(b"x" * 10)
+    part = tmp_path / ".cache" / "huggingface" / "download" / "vae"
+    part.mkdir(parents=True)
+    (part / "b.safetensors.abc.incomplete").write_bytes(b"x" * 15)
+    p = W.progress(tmp_path)
+    assert (p.done_files, p.total_files, p.done_bytes, p.total_bytes) == (1, 2, 25, 40)
+    assert not W.present(tmp_path)  # a partial download is never "present"
+    (tmp_path / W.DONE_FILE).write_text(json.dumps({"files": ["transformer/a.safetensors"]}))
+    assert W.present(tmp_path)

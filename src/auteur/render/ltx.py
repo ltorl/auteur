@@ -127,9 +127,11 @@ class LTXStreamEngine:
 
         self.weights = Path(weights).expanduser()
         if not (self.weights / "model_index.json").exists():
-            raise FileNotFoundError(
-                f"LTX-2.5 weights not found in {self.weights} — run `auteur fetch` first"
-            )
+            raise FileNotFoundError(f"LTX-2.5 weights not found in {self.weights} — run /fetch first")
+        from ..weights import PLAN_FILE, present
+
+        if (self.weights / PLAN_FILE).exists() and not present(self.weights):
+            raise FileNotFoundError(f"the LTX-2.5 download in {self.weights} is incomplete — /fetch resumes it")
         self.device = pick_device(device)
         self.dtype = torch.bfloat16
         self.cache_root = Path(cache_root).expanduser() if cache_root else None

@@ -26,6 +26,7 @@ class Settings(BaseModel):
     image_model: str = ""
     reasoning_effort: str = ""  # low | medium | high, if the model takes it
     auto_proxy: bool = True  # start `npx openai-oauth` when it isn't running
+    storyboard: bool = True  # draw cast sheets + keyframes; off = LTX shoots text-to-video
 
     # studio
     home: str = Field(default_factory=_default_home)

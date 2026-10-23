@@ -118,16 +118,27 @@ class Session:
         return self.studio.settings
 
     def reload_settings(self) -> None:
-        llm = self.studio.llm
+        old = self.studio
         self.studio = A.studio()
-        if self.studio.settings.base_url == llm.settings.base_url:
-            self.studio.llm._client = llm._client
-            self.studio.llm._models = llm._models
+        self.studio.images_blocked = old.images_blocked
+        if self.studio.settings.base_url == old.settings.base_url:
+            self.studio.llm._client = old.llm._client
+            self.studio.llm._models = old.llm._models
 
     def need_project(self) -> Project:
+        """The open film — or, if none, the most recent one (saying so)."""
         if self.project is None:
-            raise Abort("no film open", "describe an idea to start one, /new, or /open <film>")
+            latest = self.studio.store.latest()
+            if latest is None:
+                raise Abort("no film yet", "describe an idea to start one, or /new")
+            self.project = latest
+            ui.console.print(Text.assemble(("  ▶ ", "accent"), ("opened your latest film, ", "dim"),
+                                           (latest.title, "title"), ("  (/open to switch)", "dim")))
         return self.project
+
+    def next(self) -> None:
+        if self.project:
+            A.next_steps(self.project, A.storyboard_on(self.studio))
 
     def refresh(self) -> None:
         self._online = proxy_up(self.settings.base_url, timeout=0.5)
@@ -136,6 +147,7 @@ class Session:
 
     # -- chrome ----------------------------------------------------------------- #
     def welcome(self) -> None:
+        ui.fit()
         ui.banner()
         signed = codex_auth_file().exists()
         lines = Text()
@@ -158,8 +170,13 @@ class Session:
             tips.append(("/login", "sign in with ChatGPT — that's your director"))
         from . import weights as W
 
-        if self.settings.backend == "airstream" and not W.present(Path(self.settings.weights).expanduser()):
-            tips.append(("/fetch", "download LTX-2.5 (or /backend animatic to preview without it)"))
+        dest = Path(self.settings.weights).expanduser()
+        if self.settings.backend == "airstream" and not W.present(dest):
+            prog = W.progress(dest)
+            if prog and prog.done_bytes:
+                tips.append(("/fetch", f"finish downloading LTX-2.5 — {prog.fraction:.0%} done, it resumes"))
+            else:
+                tips.append(("/fetch", "download LTX-2.5 (or /backend animatic to preview without it)"))
         tips.append(("idea", "just describe a film — \"a lighthouse keeper finds a door in the sea\""))
         recent = self.studio.store.all()[:3]
         if recent and self.project is None:
@@ -170,7 +187,7 @@ class Session:
         if self.project:
             ui.console.print()
             ui.console.print(Text.assemble(("  ▶ ", "accent"), ("resuming ", "dim"), (self.project.title, "title")))
-            A.next_steps(self.project)
+            self.next()
 
     def toolbar(self):
         p = self.project
@@ -281,13 +298,17 @@ class Session:
         line = line.strip()
         if not line:
             return
+        ui.fit()
         try:
             if line.startswith("/"):
                 name, *argv = split(line[1:]) or [""]
                 cmd = lookup(name)
                 if cmd is None:
-                    close = [c for c in COMMANDS if c.startswith(name[:2])] if name else []
-                    raise Abort(f"unknown command /{name}", ("did you mean /" + close[0] + "?") if close else "/help")
+                    import difflib
+
+                    close = difflib.get_close_matches(name, [*COMMANDS, *ALIASES], n=1, cutoff=0.5)
+                    hint = f"did you mean /{ALIASES.get(close[0], close[0])}?" if close else "/help"
+                    raise Abort(f"unknown command /{name}", hint)
                 cmd.fn(self, argv)
             elif line in ("?", "help"):
                 cmd_help(self, [])
@@ -309,10 +330,10 @@ class Session:
         """Free text: a new film's idea, or a note on the open one."""
         if self.project is None:
             self.project = A.start_film(self.studio, text)
-            A.next_steps(self.project)
+            self.next()
         else:
             A.do_revise(self.studio, self.project, text)
-            A.next_steps(self.project)
+            self.next()
 
 
 # ---- completion -------------------------------------------------------------------- #
@@ -387,7 +408,7 @@ def cmd_new(s: Session, argv):
         except ValueError:
             raise Abort("-d takes seconds, e.g. -d 45") from None
         s.project = A.start_film(s.studio, idea, o["template"] or "short-film", seconds, o["aspect"], o["style"] or "")
-    A.next_steps(s.project)
+    s.next()
 
 
 @command("open", "switch to another film", "Film", "<film>", aliases=("resume",), complete=_films)
@@ -407,7 +428,7 @@ def cmd_open(s: Session, argv):
     ui.ok(f"opened {s.project.title}")
     if s.project.shots:
         ui.console.print(ui.shot_table(s.project))
-    A.next_steps(s.project)
+    s.next()
 
 
 @command("projects", "list your films", "Film", aliases=("films", "list"))
@@ -427,7 +448,7 @@ def cmd_pitch(s: Session, argv):
 @command("plan", "re-plan the shot list", "Film")
 def cmd_plan(s: Session, argv):
     A.do_plan(s.studio, s.need_project())
-    A.next_steps(s.project)
+    s.next()
 
 
 @command("cast", "draw character reference sheets", "Film", "[-f]", complete=lambda s, a: ["-f"])
@@ -441,7 +462,7 @@ def cmd_cast(s: Session, argv):
 def cmd_board(s: Session, argv):
     pos, o = opts(argv, flags={"-f": "force", "--force": "force"})
     A.do_board(s.studio, s.need_project(), A.split_ids(pos), o["force"])
-    A.next_steps(s.project)
+    s.next()
 
 
 @command("shots", "show the shot list", "Film")
@@ -483,7 +504,7 @@ def cmd_shoot(s: Session, argv):
     pos, o = opts(argv, {"-b": "backend", "--backend": "backend", "-q": "quality", "--quality": "quality"},
                   {"-f": "force", "--force": "force"})
     A.do_shoot(s.studio, s.need_project(), A.split_ids(pos), o["backend"], o["quality"], o["force"])
-    A.next_steps(s.project)
+    s.next()
 
 
 @command("cut", "assemble the final film", "Camera", "[--music file] [--no-titles]",
@@ -494,7 +515,7 @@ def cmd_cut(s: Session, argv):
     if music and not music.exists():
         raise Abort(f"no such file: {music}")
     A.do_cut(s.studio, s.need_project(), titles=not o["no_titles"], music=music)
-    A.next_steps(s.project)
+    s.next()
 
 
 @command("roll", "make the rest of the film: board → shoot → cut", "Camera", "[-b backend] [-q quality]",
@@ -503,7 +524,7 @@ def cmd_cut(s: Session, argv):
 def cmd_roll(s: Session, argv):
     _, o = opts(argv, {"-b": "backend", "--backend": "backend", "-q": "quality", "--quality": "quality"})
     A.do_roll(s.studio, s.need_project(), o["backend"], o["quality"])
-    A.next_steps(s.project)
+    s.next()
 
 
 @command("play", "watch the cut (or a shot)", "Camera", "[S03]", aliases=("watch",), complete=_shot_ids)

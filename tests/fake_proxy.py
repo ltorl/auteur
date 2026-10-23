@@ -79,6 +79,8 @@ class Handler(BaseHTTPRequestHandler):
         raw = self.rfile.read(n)
         self.server.calls.append((self.path, raw if b"chat" in self.path.encode() else raw[:2000]))
         if self.path.endswith("/images/generations") or self.path.endswith("/images/edits"):
+            if self.server.image_status != 200:  # e.g. a plan without image generation
+                return self._json({"detail": "Forbidden"}, self.server.image_status)
             return self._json({"created": 0, "data": [{"b64_json": png()}]})
         if self.path.endswith("/chat/completions"):
             req = json.loads(raw)
@@ -116,6 +118,6 @@ class Handler(BaseHTTPRequestHandler):
 
 def serve():
     srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    srv.calls, srv.plans = [], 0
+    srv.calls, srv.plans, srv.image_status = [], 0, 200
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     return srv, f"http://127.0.0.1:{srv.server_address[1]}/v1"
