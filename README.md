@@ -140,8 +140,9 @@ Quality presets (`-q`): `draft` 768×448, `standard` 1024×576, `hq` 1920×1088 
 Like AirLLM, but for a video diffusion model:
 
 1. The big modules are built on PyTorch's `meta` device, so they use no memory.
-2. A forward-pre-hook on each repeated block reads that block's tensors from `safetensors`
-   (mmap), moves them to the GPU and runs the block. A forward-hook then drops them.
+2. A forward-pre-hook on each repeated block reads that block's file in one sequential read,
+   dequantizes it on a thread pool, moves it to the GPU and runs the block. A forward-hook then
+   drops it.
 3. A background thread prefetches the *next* block while the current one computes. The call order
    is learned on the first pass.
 4. `/fetch` pre-splits the weights into one file per block, with per-row **fp8** for Linear
@@ -153,9 +154,20 @@ Streaming produces bit-identical output to the stock diffusers pipeline (see
 `tests/test_ltx_stream.py`). What stays in memory: about 2 DiT blocks (≈0.9 GB each in bf16),
 the VAEs, the vocoder and activations.
 
-**Speed.** Each denoising step re-reads the whole DiT from disk (about 19 GB with the fp8 cache).
-Disk throughput, not the GPU, is the limit on a 16 GB machine, so expect minutes per shot, not
-seconds. Preview with `-b animatic`, then shoot.
+**Speed.** Each denoising step re-reads the whole DiT from disk (18 GB with the fp8 cache), because
+it doesn't fit in memory on a 16 GB machine. Measured on a 16 GB M5 MacBook Air with the real
+weights:
+
+| stage | time |
+|---|---|
+| load the pipeline | 11 s |
+| text encoder (12B, streamed once per batch of prompts) | 53 s |
+| one DiT step (22B, 48 blocks streamed) | 31 s at 256×256 |
+| video + audio decode | 8 s |
+
+A draft shot runs 8 steps, and GPU work grows with resolution, so expect a few minutes per shot.
+Close other memory-hungry apps while shooting: if the machine starts swapping, a step can take
+many times longer. Preview with `-b animatic`, then shoot.
 
 ## Configuration
 

@@ -190,20 +190,55 @@ class LayerCacheSource:
         return h
 
     def read(self, model_keys: Iterable[str]) -> dict[str, torch.Tensor]:
-        out = {}
-        with self._lock:
-            for key in model_keys:
-                name = self._file_of.get(key)
-                if name is None:
-                    continue
-                h = self._handle(name)
-                t = h.get_tensor(key)
+        raw: dict[str, torch.Tensor] = {}
+        scales: dict[str, torch.Tensor] = {}
+        by_file: dict[str, list[str]] = {}
+        for key in model_keys:
+            name = self._file_of.get(key)
+            if name is not None:
+                by_file.setdefault(name, []).append(key)
+        for name, keys in by_file.items():
+            if name.startswith("unit_"):
+                # One sequential read per block (4-6 GB/s on Apple SSDs). mmap'd
+                # get_tensor is lazy and pays for it later in page faults at a
+                # fraction of the throughput, because each step streams more than
+                # fits in the page cache.
+                from safetensors.torch import load as load_bytes
+
+                with open(self.path / name, "rb", buffering=0) as fh:
+                    tensors = load_bytes(fh.read())
+                get = tensors.__getitem__
+            else:
+                with self._lock:
+                    h = self._handle(name)
+                get = h.get_tensor
+            for key in keys:
+                t = get(key)
+                raw[key] = t
                 if FP8 is not None and t.dtype == FP8:
-                    # fp8 -> bf16 is exact; scaling in bf16 avoids a 4-byte/param temporary
-                    scale = h.get_tensor(key + SCALE_SUFFIX).to(torch.bfloat16)
-                    t = t.to(torch.bfloat16).mul_(scale)
-                out[key] = t
-        return out
+                    scales[key] = get(key + SCALE_SUFFIX)
+        if not scales:
+            return raw
+
+        def dequant(key: str) -> tuple[str, torch.Tensor]:
+            # fp8 -> bf16 is exact; scaling in bf16 avoids a 4-byte/param temporary
+            return key, raw[key].to(torch.bfloat16).mul_(scales[key].to(torch.bfloat16))
+
+        # Dequantisation is the per-block bottleneck on CPU (~0.6 s for a 22B DiT
+        # block single-threaded); torch releases the GIL, so a pool gives ~3.5x.
+        raw.update(_dequant_pool().map(dequant, list(scales)))
+        return raw
+
+
+_POOL: ThreadPoolExecutor | None = None
+
+
+def _dequant_pool() -> ThreadPoolExecutor:
+    global _POOL
+    if _POOL is None:
+        _POOL = ThreadPoolExecutor(max_workers=max(2, min(6, (os.cpu_count() or 4) - 2)),
+                                   thread_name_prefix="airstream-dequant")
+    return _POOL
 
 
 def open_source(path: str | os.PathLike):
