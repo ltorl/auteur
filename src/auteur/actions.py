@@ -68,7 +68,10 @@ def open_file(path: Path) -> None:
 
 
 def interactive() -> bool:
-    return sys.stdin.isatty() and sys.stdout.isatty()
+    """Can we ask the user something? Inside the full-screen app always (it renders
+    the picker), even though stdout is then a pipe into the log; otherwise only
+    with a real terminal on both ends."""
+    return ui.host is not None or (sys.stdin.isatty() and sys.stdout.isatty())
 
 
 def choose(question: str, choices: list[str], default: str | None = None, icon: str = "▸") -> str | None:

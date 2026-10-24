@@ -349,7 +349,7 @@ def cmd_new(s: Session, argv):
                          "-a": "aspect", "--aspect": "aspect", "--style": "style"})
     idea = " ".join(pos)
     if not idea:
-        if not A.interactive() or s.pt_input is not None:
+        if not A.interactive():
             raise Abort("give me an idea", '/new "a heist told from the vault\'s point of view"')
         q = A.new_film_questions(s.settings.aspect)
         if q is None:
@@ -367,16 +367,22 @@ def cmd_new(s: Session, argv):
 @command("open", "switch to another film", "Film", "<film>", aliases=("resume",), complete=_films)
 def cmd_open(s: Session, argv):
     if not argv:
-        films = _films(s, [])
+        films = s.studio.store.all()
         if not films:
             raise Abort("no films yet", "describe an idea to start one")
-        if not A.interactive() or s.pt_input is not None:
-            ui.console.print(ui.project_list(s.studio.store.all()))
+        if not A.interactive():
+            ui.console.print(ui.project_list(films))
             return
-        pick = A.choose("Open which film?", films, icon="▶")
+        labels = {}
+        for p in films:
+            shot = sum(x.status == "shot" for x in p.shots)
+            progress = f"{shot}/{len(p.shots)} shot" if p.shots else "treatment"
+            label = f"{p.title}  ·  {progress}  ·  {p.updated:%b %d %H:%M}"
+            labels[label if label not in labels else f"{label}  ({p.slug})"] = p.slug
+        pick = A.choose("Open which film?", list(labels), icon="▶")
         if pick is None:
             return
-        argv = [pick]
+        argv = [labels[pick]]
     s.project = A.find_project(s.studio, argv[0])
     ui.ok(f"opened {s.project.title}")
     if s.project.shots:
@@ -498,7 +504,7 @@ def cmd_play(s: Session, argv):
 def _setting(key: str, values: list[str], label: str):
     def fn(s: Session, argv):
         if not argv:
-            if A.interactive() and s.pt_input is None:
+            if A.interactive():
                 pick = A.choose(label, values, default=getattr(s.settings, key))
                 if pick is None:
                     return
@@ -548,7 +554,7 @@ def cmd_model(s: Session, argv):
 
         ranked = rank_image_models(models) if key == "image_model" else rank_text_models(models)
         current = getattr(s.settings, key) or "auto"
-        if not A.interactive() or s.pt_input is not None:
+        if not A.interactive():
             ui.console.print(Text.assemble(("  current ", "dim"), (current, "accent"), ("   available ", "dim"),
                                            (", ".join(ranked), "ink")))
             return

@@ -126,3 +126,38 @@ def test_typo_suggestions(env, capsys):
     assert "did you mean /roll?" in out
     assert "did you mean /open?" in out
     assert "did you mean /board?" in out                       # via the alias 'storyboard'
+
+
+def drive_keys(*steps, **kw) -> Session:
+    """Like drive(), but each step's keys are sent after a pause, so pickers
+    raised by the previous command are on screen when the keys arrive."""
+    import threading
+    import time
+
+    with create_pipe_input() as inp:
+        def typist():
+            for keys in steps:
+                time.sleep(1.0)
+                inp.send_text(keys)
+
+        threading.Thread(target=typist, daemon=True).start()
+        s = Session(pt_input=inp, pt_output=DummyOutput(), **kw)
+        s.run()
+    return s
+
+
+DOWN = "\x1b[B"
+
+
+def test_pickers_in_the_full_screen_app(env):
+    """Regression: redirecting stdout into the log made every picker fall back
+    to its non-interactive path (e.g. /open just printed the film list)."""
+    srv, tmp = env
+    drive("a lamplighter's last night", "/exit")
+    s = drive_keys("/open\r", "\r", "/backend\r", DOWN + DOWN + "\r", "/quality\r", "\x1b", "/exit\r")
+    out = s.transcript
+    assert "? Open which film?" in out and "opened The Last Lamplighter" in out
+    assert s.project and s.project.slug.startswith("a-lamplighter")
+    assert "? Render with  animatic" in out
+    assert json.loads((tmp / "cfg" / "config.json").read_text())["backend"] == "animatic"
+    assert "? Quality  cancelled" in out  # Esc cancels without changing anything
